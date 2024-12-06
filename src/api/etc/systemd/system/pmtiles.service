@@ -1,0 +1,16 @@
+[Unit]
+Description=PMTiles Server
+After=network.target
+
+[Service]
+ExecStart=/usr/local/bin/pmtiles serve /media/username/data1/ --port 8081
+WorkingDirectory=/media/username/data1
+StandardOutput=journal
+StandardError=journal
+Restart=always
+RestartSec=5
+User=username
+Group=username
+
+[Install]
+WantedBy=multi-user.target

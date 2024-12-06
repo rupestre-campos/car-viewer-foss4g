@@ -1,0 +1,9 @@
+proc            /proc           proc    defaults          0       0
+PARTUUID=7b8fea69-01  /boot/firmware  vfat    defaults          0       2
+PARTUUID=7b8fea69-02  /               ext4    defaults,noatime  0       1
+# a swapfile is not a swap partition, no line here
+#   use  dphys-swapfile swap[on|off]  for that
+UUID=8babf131-9f8b-7a1d-b53d-8c3182827eb0 /media/username/data ext4 defaults 0 2
+UUID=07DD6A24155F1227 /media/username/data1 ntfs defaults 0 2
+
+#run blkid to discover uuid

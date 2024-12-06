@@ -1,0 +1,6 @@
+streamlit==1.36.0
+streamlit-folium==0.21.1
+folium==0.17.0
+streamlit-navigation-bar==3.3.0
+requests
+unidecode

@@ -1,0 +1,13 @@
+[Unit]
+Description=ETL updater
+After=network.target
+
+[Service]
+WorkingDirectory=/home/username/car-viewer-foss4g
+ExecStart=/home/username/car/.venv/bin/python /home/username/car-viewer-foss4g/etl_sicar.py
+Restart=always
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
