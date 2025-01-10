@@ -335,20 +335,25 @@ def switch_active_version(state, theme, release_date):
         table=sql.Identifier(table_name),
         table_temp=sql.Identifier(temp_table_name)
     )
-    delete_temp_table(state, theme)
 
+    done = False
     try:
         # Execute the transaction
         cursor.execute(switch_active_version_query, (table_name,))
         # Commit the transaction
         conn.commit()
+        done = True
     except Exception as e:
         # If an error occurs, rollback the transaction
         conn.rollback()
-        print(f"An error occurred: {e}")
+        print(f"An error occurred on switch versions: {e}")
+
     finally:
         # Always close the cursor
+        delete_temp_table(state, theme)
         cursor.close()
+        conn.close
+    return done
 
 def read_shapefile(shapefile_path):
     # Open the shapefile using OGR
@@ -434,11 +439,12 @@ def create_temp_table(state, theme):
     try:
         # Execute the transaction
         cursor.execute(table_query)
-
-        cursor.execute(partition_query, [state.upper()])
+        conn.commit()
+        cursor.execute(partition_query, (state.upper(),))
 
         # Commit the transaction
         conn.commit()
+        print(f"temp table {table_name} created")
     except Exception as e:
         # If an error occurs, rollback the transaction
         conn.rollback()
@@ -496,9 +502,10 @@ def process_shapefiles_and_save_to_db(extracted_folder, state, theme, release_da
     create_indices(state, theme)
     # insert statistics
 
-    switch_active_version(state, theme, release_date)
-    insert_statistics_data(feature_count, release_date, theme, state)
-    vacuum(theme, state)
+    done = switch_active_version(state, theme, release_date)
+    if done:
+        insert_statistics_data(feature_count, release_date, theme, state)
+        vacuum(theme, state)
 
 def get_car( state, theme, out_folder):
     result = False
