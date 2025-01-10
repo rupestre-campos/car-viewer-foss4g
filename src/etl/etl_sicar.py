@@ -28,9 +28,11 @@ user_agent_rotator = UserAgent(software_names=software_names, operating_systems=
 out_root_folder = "/media/cx/data1/temp"
 MAX_MEMORY_PERCENT_TO_USE = 0.2
 max_batch_size = 10000
-timeout = 5
+timeout = 25
 chunk_size = 5 * 1024
 ip_proxy = secrets.ip_proxy
+local_proxy = "http://127.0.0.1:3128"
+
 min_download_rate = 25
 
 max_workers = 3
@@ -54,7 +56,7 @@ class CycleVariable:
         return value
 
 
-proxy = CycleVariable([None,ip_proxy])
+proxy = CycleVariable([local_proxy, ip_proxy])
 use_http2 = CycleVariable([True])
 user_agent = CycleVariable([ x.get("user_agent") for x in user_agent_rotator.get_user_agents()])
 
@@ -119,11 +121,8 @@ def create_statistics_table():
     cursor.close()
     conn.close()
 
-def create_partition_and_table( state, theme):
-    conn = connect_db()
-    cursor = conn.cursor()
-
-    table_query = sql.SQL("""
+def main_table_structure(table_name):
+    return sql.SQL("""
         CREATE TABLE IF NOT EXISTS {table} (
             id UUID,
             car_code TEXT,
@@ -139,15 +138,23 @@ def create_partition_and_table( state, theme):
             PRIMARY KEY (id, state_code)
         ) PARTITION BY LIST (state_code);
     """).format(
-        table=sql.Identifier(theme.lower())
+        table=sql.Identifier(table_name)
     )
-    cursor.execute(table_query)
-    partition_query = sql.SQL("""
+
+def partition_table_structure(table_name, value_partition):
+    return sql.SQL("""
         CREATE TABLE IF NOT EXISTS {partition} PARTITION OF {table} FOR VALUES IN (%s) ;
     """).format(
-        partition=sql.Identifier(f"{theme.lower()}_{state.lower()}"),
-        table=sql.Identifier(theme.lower()),
+        partition=sql.Identifier(f"{table_name}_{value_partition}"),
+        table=sql.Identifier(table_name),
     )
+
+def create_partition_and_table( state, theme):
+    conn = connect_db()
+    cursor = conn.cursor()
+    table_query = main_table_structure(theme.lower())
+    cursor.execute(table_query)
+    partition_query = partition_table_structure(theme.lower(), state.lower())
     cursor.execute(partition_query, [state.upper()])
 
     conn.commit()
@@ -265,7 +272,7 @@ def insert_statistics_data(feature_count, release_date, layer, state_code):
 def insert_data_batch(conn, state, theme, batch, release_date):
     cursor = conn.cursor()
     # Collect all car codes from the batch
-
+    table_name = f"{theme.lower()}_temp"
     # Filter batch to include only new records
     new_records = [
         (
@@ -276,7 +283,7 @@ def insert_data_batch(conn, state, theme, batch, release_date):
             feature["hash"],
             feature["geom_hash"],
             feature["properties_hash"],
-            0,  # Assume active is set to 0 by default
+            1,
             feature["geometry"],
             Json(feature["properties"])
         )
@@ -299,7 +306,7 @@ def insert_data_batch(conn, state, theme, batch, release_date):
                 properties)
             VALUES %s
         """).format(
-            table=sql.Identifier(theme.lower())
+            table=sql.Identifier(table_name)
         )
         execute_values(cursor, insert_query.as_string(conn), new_records)
         conn.commit()
@@ -310,31 +317,30 @@ def switch_active_version(state, theme, release_date):
     conn = connect_db()
     cursor = conn.cursor()
     # Use a single query with a transaction block to update the active status
+    table_name = f"{theme.lower()}_{state.lower()}"
+    temp_table_name = f"{theme.lower()}_temp_{state.lower()}"
     switch_active_version_query = sql.SQL("""
         BEGIN;
 
         -- Deactivate all currently active records
 
-        DELETE FROM {table}
-        WHERE
-        state_code = %s
-        AND active = 1;
+        TRUNCATE {table_temp};
 
         -- Activate the latest record for each car_code
-        UPDATE {table}
-        SET active = 1
-        WHERE state_code = %s
-        ;
+        INSERT INTO {table}
+        SELECT * FROM {temp_table};
 
         COMMIT;
     """).format(
-        table=sql.Identifier(theme.lower())
+        table=sql.Identifier(table_name),
+        temp_table=sql.Identifier(temp_table_name)
     )
+    drop_temp_table = delete_temp_table(state, theme)
 
     try:
         # Execute the transaction
-        cursor.execute(switch_active_version_query, (state.upper(), state.upper()))
-
+        cursor.execute(switch_active_version_query, (table_name,))
+        cursor.execute(drop_temp_table)
         # Commit the transaction
         conn.commit()
     except Exception as e:
@@ -393,6 +399,61 @@ def read_shapefile(shapefile_path):
     # Cleanup: close the data source
     datasource = None
 
+def delete_temp_table(state, theme):
+    conn = connect_db()
+    cursor = conn.cursor()
+    table_name = f"{theme.lower()}_temp_{state.lower()}"
+    # Use a single query with a transaction block to update the active status
+    drop_temp_table = sql.SQL("""
+        DROP TABLE IF EXISTS {table};
+    """).format(
+        table=sql.Identifier(table_name)
+    )
+
+    try:
+        # Execute the transaction
+        cursor.execute(drop_temp_table, (table_name,))
+
+        # Commit the transaction
+        conn.commit()
+    except Exception as e:
+        # If an error occurs, rollback the transaction
+        conn.rollback()
+        print(f"An error occurred: {e}")
+    finally:
+        # Always close the cursor
+        cursor.close()
+
+
+def create_temp_table(state, theme):
+    conn = connect_db()
+    cursor = conn.cursor()
+    table_name = f"{theme.lower()}_temp"
+    table_query = main_table_structure(table_name)
+
+    try:
+        # Execute the transaction
+        cursor.execute(table_query)
+        conn = connect_db()
+        cursor = conn.cursor()
+        table_query = main_table_structure(table_name)
+        cursor.execute(table_query)
+        partition_query = partition_table_structure(table_name, state.lower())
+        cursor.execute(partition_query, [state.upper()])
+
+        conn.commit()
+        cursor.close()
+        conn.close()
+        # Commit the transaction
+        conn.commit()
+    except Exception as e:
+        # If an error occurs, rollback the transaction
+        conn.rollback()
+        print(f"An error occurred: {e}")
+    finally:
+        # Always close the cursor
+        cursor.close()
+
 def process_shapefiles_and_save_to_db(extracted_folder, state, theme, release_date):
     def insert_batch(batch, release_date):
         try:
@@ -407,6 +468,8 @@ def process_shapefiles_and_save_to_db(extracted_folder, state, theme, release_da
     extracted_folder = Path(extracted_folder)
     shapefiles = list(extracted_folder.glob("**/*.shp"))
     feature_count = 0
+    delete_temp_table(state, theme)
+    create_temp_table(state, theme)
     for shapefile in shapefiles:
         print("inserting into database...")
         batch_size_bytes = 0
@@ -543,14 +606,14 @@ def process_state_theme_pair(state, theme, release_dates, done_list):
         release_date = datetime.strptime(release_dates[state], "%d/%m/%Y").strftime("%Y-%m-%d")
         check_data_already = check_data_exists(state, theme, release_date)
 
-        if not check_data_already:
-            clean_orphan_rows(state, theme, release_date)
+        #if not check_data_already:
+        #clean_orphan_rows(state, theme, release_date)
         if check_data_already:
             done_list["done"].append((state, theme))
             print(f"Data already exists for {state}, {theme}")
             return
 
-        state_folder = os.path.join(out_root_folder, state) #TODO add release_date
+        state_folder = os.path.join(out_root_folder, state)
         out_folder = os.path.join(state_folder, theme)
 
         os.makedirs(out_folder, exist_ok=True)
