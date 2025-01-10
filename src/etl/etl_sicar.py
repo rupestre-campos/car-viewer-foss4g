@@ -56,7 +56,7 @@ class CycleVariable:
         return value
 
 
-proxy = CycleVariable([local_proxy, ip_proxy])
+proxy = CycleVariable([local_proxy])
 use_http2 = CycleVariable([True])
 user_agent = CycleVariable([ x.get("user_agent") for x in user_agent_rotator.get_user_agents()])
 
@@ -324,23 +324,22 @@ def switch_active_version(state, theme, release_date):
 
         -- Deactivate all currently active records
 
-        TRUNCATE {table_temp};
+        TRUNCATE {table};
 
         -- Activate the latest record for each car_code
         INSERT INTO {table}
-        SELECT * FROM {temp_table};
+        SELECT * FROM {table_temp};
 
         COMMIT;
     """).format(
         table=sql.Identifier(table_name),
-        temp_table=sql.Identifier(temp_table_name)
+        table_temp=sql.Identifier(temp_table_name)
     )
-    drop_temp_table = delete_temp_table(state, theme)
+    delete_temp_table(state, theme)
 
     try:
         # Execute the transaction
         cursor.execute(switch_active_version_query, (table_name,))
-        cursor.execute(drop_temp_table)
         # Commit the transaction
         conn.commit()
     except Exception as e:
@@ -431,19 +430,13 @@ def create_temp_table(state, theme):
     table_name = f"{theme.lower()}_temp"
     table_query = main_table_structure(table_name)
 
+    partition_query = partition_table_structure(table_name, state.lower())
     try:
         # Execute the transaction
         cursor.execute(table_query)
-        conn = connect_db()
-        cursor = conn.cursor()
-        table_query = main_table_structure(table_name)
-        cursor.execute(table_query)
-        partition_query = partition_table_structure(table_name, state.lower())
+
         cursor.execute(partition_query, [state.upper()])
 
-        conn.commit()
-        cursor.close()
-        conn.close()
         # Commit the transaction
         conn.commit()
     except Exception as e:
@@ -468,7 +461,9 @@ def process_shapefiles_and_save_to_db(extracted_folder, state, theme, release_da
     extracted_folder = Path(extracted_folder)
     shapefiles = list(extracted_folder.glob("**/*.shp"))
     feature_count = 0
+    print("deleting temp table")
     delete_temp_table(state, theme)
+    print("creating temp table")
     create_temp_table(state, theme)
     for shapefile in shapefiles:
         print("inserting into database...")
