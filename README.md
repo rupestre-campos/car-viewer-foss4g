@@ -1,6 +1,6 @@
 # CAR Viewer
 
-## Living DEMO
+## Live car-viewer map
 https://car-viewer.streamlit.app
 
 
