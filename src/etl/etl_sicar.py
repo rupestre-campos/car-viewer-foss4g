@@ -31,7 +31,6 @@ max_batch_size = 10000
 timeout = 25
 chunk_size = 5 * 1024
 ip_proxy = secrets.ip_proxy
-local_proxy = "http://127.0.0.1:3128"
 
 min_download_rate = 25
 
@@ -56,7 +55,7 @@ class CycleVariable:
         return value
 
 
-proxy = CycleVariable([local_proxy])
+proxy = CycleVariable([ip_proxy])
 use_http2 = CycleVariable([True])
 user_agent = CycleVariable([ x.get("user_agent") for x in user_agent_rotator.get_user_agents()])
 
