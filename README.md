@@ -27,7 +27,8 @@ on the main server
 ```
 sudo apt update
 sudo apt install build-essential libsqlite3-dev zlib1g-dev \
-    tesseract-ocr postgresql postgis wget gdal-bin libgdal-dev squid python3-venv
+    tesseract-ocr postgresql postgis wget gdal-bin libgdal-dev \
+    squid python3-venv python3-dev
 ```
 
 setup postgres with your password
