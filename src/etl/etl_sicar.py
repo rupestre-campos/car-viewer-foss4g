@@ -26,15 +26,15 @@ user_agent_rotator = UserAgent(software_names=software_names, operating_systems=
 
 
 out_root_folder = "/media/cx/data1/temp"
-MAX_MEMORY_PERCENT_TO_USE = 0.2
-max_batch_size = 10000
+MAX_MEMORY_PERCENT_TO_USE = 0.01
+max_batch_size = 100
 timeout = 25
 chunk_size = 5 * 1024
 ip_proxy = secrets.ip_proxy
 
 min_download_rate = 25
 
-max_workers = 3
+max_workers = 1
 overwrite = False
 
 states = list(State)
