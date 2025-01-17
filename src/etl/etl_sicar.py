@@ -268,7 +268,9 @@ def insert_statistics_data(feature_count, release_date, layer, state_code):
     cursor.close()
     conn.close()
 
-def insert_data_batch(conn, state, theme, batch, release_date):
+def insert_data_batch(state, theme, batch, release_date):
+    print(f"Inserting batch {state} {theme}")
+    conn = connect_db()
     cursor = conn.cursor()
     # Collect all car codes from the batch
     table_name = f"{theme.lower()}_temp"
@@ -311,6 +313,7 @@ def insert_data_batch(conn, state, theme, batch, release_date):
         conn.commit()
 
     cursor.close()
+    conn.close()
 
 def switch_active_version(state, theme, release_date):
     conn = connect_db()
@@ -340,6 +343,7 @@ def switch_active_version(state, theme, release_date):
         # Execute the transaction
         cursor.execute(switch_active_version_query, (table_name,))
         # Commit the transaction
+        delete_temp_table(state, theme)
         conn.commit()
         done = True
     except Exception as e:
@@ -349,9 +353,8 @@ def switch_active_version(state, theme, release_date):
 
     finally:
         # Always close the cursor
-        delete_temp_table(state, theme)
         cursor.close()
-        conn.close
+        conn.close()
     return done
 
 def read_shapefile(shapefile_path):
@@ -371,36 +374,52 @@ def read_shapefile(shapefile_path):
         try:
             # Convert the feature's geometry to GeoJSON
             geom = feature.GetGeometryRef()
-            wkb = geom.ExportToWkb()
-            object_size = len(wkb)
-            geom_hash = hashlib.md5(wkb).hexdigest()
 
-            # Create a GeoJSON-like dictionary for the feature
-            properties = {}
+            if geom is None:
+                continue
 
-            # Add properties to the dictionary
-            for field_name in feature.keys():
-                properties[field_name] = feature.GetField(field_name)
-            properties_str = json.dumps(properties, sort_keys=True)
-            properties_str_encode = properties_str.encode("utf-8")
-            object_size += len(properties_str_encode)
+            # Check if geometry is MultiPolygon
+            if geom.GetGeometryType() == ogr.wkbMultiPolygon:
+                # Loop through each polygon in the MultiPolygon
+                for i in range(geom.GetGeometryCount()):
+                    sub_geom = geom.GetGeometryRef(i)
+                    yield from process_geometry(feature, sub_geom)
+            else:
+                # Process single-part geometries
+                yield from process_geometry(feature, geom)
 
-            properties_hash = hashlib.md5(properties_str_encode).hexdigest()
-            feature_hash = hashlib.md5(f"{geom_hash}-{properties_hash}".encode("utf-8")).hexdigest()
-            yield {
-                "geometry": wkb,
-                "properties": properties,
-                "size": object_size,
-                "hash": feature_hash,
-                "geom_hash": geom_hash,
-                "properties_hash": properties_hash
-            }
         except Exception as e:
             print(f"Error processing feature: {e}")
             continue
 
-    # Cleanup: close the data source
-    datasource = None
+
+def process_geometry(feature, geom):
+    # Export geometry to WKB
+    wkb = geom.ExportToWkb()
+    object_size = len(wkb)
+    geom_hash = hashlib.md5(wkb).hexdigest()
+
+    # Create a GeoJSON-like dictionary for the feature
+    properties = {}
+
+    # Add properties to the dictionary
+    for field_name in feature.keys():
+        properties[field_name] = feature.GetField(field_name)
+    properties_str = json.dumps(properties, sort_keys=True)
+    properties_str_encode = properties_str.encode("utf-8")
+    object_size += len(properties_str_encode)
+
+    properties_hash = hashlib.md5(properties_str_encode).hexdigest()
+    feature_hash = hashlib.md5(f"{geom_hash}-{properties_hash}".encode("utf-8")).hexdigest()
+
+    yield {
+        "geometry": wkb,
+        "properties": properties,
+        "size": object_size,
+        "hash": feature_hash,
+        "geom_hash": geom_hash,
+        "properties_hash": properties_hash
+    }
 
 def delete_temp_table(state, theme):
     conn = connect_db()
@@ -426,6 +445,7 @@ def delete_temp_table(state, theme):
     finally:
         # Always close the cursor
         cursor.close()
+        conn.close()
 
 
 def create_temp_table(state, theme):
@@ -451,44 +471,41 @@ def create_temp_table(state, theme):
     finally:
         # Always close the cursor
         cursor.close()
+        conn.close()
 
 def process_shapefiles_and_save_to_db(extracted_folder, state, theme, release_date):
-    def insert_batch(batch, release_date):
-        try:
-            conn = connect_db()
-            insert_data_batch(conn, state, theme, batch, release_date)
-        finally:
-            conn.close()
 
     # Get total available RAM in bytes and divide by 10 for batch size
     max_batch_size_bytes = psutil.virtual_memory().available * MAX_MEMORY_PERCENT_TO_USE
 
     extracted_folder = Path(extracted_folder)
-    shapefiles = list(extracted_folder.glob("**/*.shp"))
-    feature_count = 0
-    print("deleting temp table")
-    delete_temp_table(state, theme)
-    print("creating temp table")
-    create_temp_table(state, theme)
-    for shapefile in shapefiles:
-        print("inserting into database...")
-        batch_size_bytes = 0
-        batch = []
+    try:
+        shapefiles = list(extracted_folder.glob("**/*.shp"))
+        feature_count = 0
+        print("deleting temp table")
+        delete_temp_table(state, theme)
+        print("creating temp table")
+        create_temp_table(state, theme)
 
-        for feature in read_shapefile(shapefile.as_posix()):
-            batch.append(feature)
-            batch_size_bytes += feature["size"]
-            feature_count += 1
+        for shapefile in shapefiles:
+            print("inserting into database...")
+            batch_size_bytes = 0
+            batch = []
 
-            if batch_size_bytes >= max_batch_size_bytes or len(batch)>max_batch_size:
-                # Submit a batch for insertion
-                insert_batch(batch, release_date)
-                batch = []
-                batch_size_bytes = 0
+            for feature in read_shapefile(shapefile.as_posix()):
+                batch.append(feature)
+                batch_size_bytes += feature["size"]
+                feature_count += 1
 
-        # Insert any remaining features in the batch
-        if batch:
-            insert_batch(batch, release_date)
+                if batch_size_bytes >= max_batch_size_bytes or len(batch)>max_batch_size:
+                    # Submit a batch for insertion
+                    insert_data_batch(state, theme, batch, release_date)
+                    batch = []
+                    batch_size_bytes = 0
+
+            # Insert any remaining features in the batch
+            if batch:
+                insert_data_batch(state, theme, batch, release_date)
 
             # Clean up the shapefile and its associated files
             for ext in [".shp", ".prj", ".shx", ".dbf", ".fix"]:
@@ -497,14 +514,26 @@ def process_shapefiles_and_save_to_db(extracted_folder, state, theme, release_da
                 except Exception as e:
                     print(f"Error removing file {shapefile.with_suffix(ext)}: {e}")
 
-    # Create indices
-    create_indices(state, theme)
-    # insert statistics
 
-    done = switch_active_version(state, theme, release_date)
-    if done:
-        insert_statistics_data(feature_count, release_date, theme, state)
-        vacuum(theme, state)
+        # Create indices
+        print("Creating indexes")
+        create_indices(state, theme)
+        # insert statistics
+        print("Inserting from temp to real table")
+        done = switch_active_version(state, theme, release_date)
+        if done:
+            insert_statistics_data(feature_count, release_date, theme, state)
+            print("Vacuuming")
+            vacuum(theme, state)
+    except Exception as e:
+        print(f"Error inserting shapefile: {e}")
+    finally:
+        for file in list(extracted_folder.glob("**/*")):
+            try:
+                os.remove(file)
+            except Exception as e:
+                print(f"Could not remove file: {e}")
+
 
 def get_car( state, theme, out_folder):
     result = False
@@ -553,6 +582,7 @@ def check_data_exists( state, layer, release_date):
     cursor.execute(query, (state.upper(), layer, release_date))
     count = cursor.fetchone()[0]
     cursor.close()
+    conn.close()
 
     return count > 0
 
@@ -595,7 +625,6 @@ def clean_orphan_rows(state, theme, release_date):
 
     finally:
         cursor.close()
-
         conn.close()
 
 def process_state_theme_pair(state, theme, release_dates, done_list):
