@@ -8,7 +8,6 @@ from psycopg2.extras import Json, execute_values
 from psycopg2 import sql
 from uuid_extensions import uuid7str
 from SICAR import Sicar, Polygon, State
-import secrets_config as secrets
 from osgeo import ogr
 import psutil
 import hashlib
@@ -20,26 +19,45 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime
 from multiprocessing import Manager
 
-software_names = [SoftwareName.CHROME.value, SoftwareName.FIREFOX.value, SoftwareName.EDGE.value, SoftwareName.SAFARI.value]
-operating_systems = [OperatingSystem.WINDOWS.value, OperatingSystem.LINUX.value, OperatingSystem.MACOS.value]
-user_agent_rotator = UserAgent(software_names=software_names, operating_systems=operating_systems, limit=100)
+out_root_folder = os.getenv("OUT_ROOT_FOLDER", "/tmp")
+max_memory_percent_to_use = float(os.getenv("MAX_MEMORY_PERCENT_TO_USE", 0.01))
+max_batch_size = int(os.getenv("MAX_BATCH_SIZE", 100))
+timeout = int(os.getenv("TIMEOUT", 25))
+chunk_size = int(os.getenv("CHUNK_SIZE", 5 * 1024))
+use_proxy = os.getenv("USE_PROXY", "True").lower() in ("true", "1", "yes")
+ip_proxy = os.getenv("IP_PROXY", "http://127.0.0.1:3128")
+use_http2 = os.getenv("USE_HTTP2", "True").lower() in ("true", "1", "yes")
+min_download_rate = int(os.getenv("MIN_DOWNLOAD_RATE", 25))
+max_workers = int(os.getenv("MAX_WORKERS", 1))
+overwrite = os.getenv("OVERWRITE", "False").lower() in ("true", "1", "yes")
 
-
-out_root_folder = "/media/cx/data1/temp"
-MAX_MEMORY_PERCENT_TO_USE = 0.01
-max_batch_size = 100
-timeout = 25
-chunk_size = 5 * 1024
-ip_proxy = secrets.ip_proxy
-
-min_download_rate = 25
-
-max_workers = 1
-overwrite = False
+proxy = None
+if use_proxy:
+    proxy = ip_proxy
+print(use_proxy, proxy)
 
 states = list(State)
 themes = list(Polygon)
 
+def connect_db():
+    conn = psycopg2.connect(
+        dbname=os.getenv("POSTGRES_DB"),
+        user=os.getenv("POSTGRES_USER"),
+        password=os.getenv("POSTGRES_PASSWORD"),
+        host=os.getenv("POSTGRES_HOST"),
+        port=os.getenv("POSTGRES_PORT")
+    )
+    return conn
+
+def connect_default_db():
+    conn = psycopg2.connect(
+        dbname="postgres",
+        user=os.getenv("POSTGRES_USER"),
+        password=os.getenv("POSTGRES_PASSWORD"),
+        host=os.getenv("POSTGRES_HOST"),
+        port=os.getenv("POSTGRES_PORT")
+    )
+    return conn
 
 class CycleVariable:
     def __init__(self, values):
@@ -54,10 +72,11 @@ class CycleVariable:
         print(value)
         return value
 
+software_names = [SoftwareName.CHROME.value, SoftwareName.FIREFOX.value, SoftwareName.EDGE.value, SoftwareName.SAFARI.value]
+operating_systems = [OperatingSystem.WINDOWS.value, OperatingSystem.LINUX.value, OperatingSystem.MACOS.value]
+user_agent_rotator = UserAgent(software_names=software_names, operating_systems=operating_systems, limit=100)
 
-proxy = CycleVariable([ip_proxy])
-use_http2 = CycleVariable([True])
-user_agent = CycleVariable([ x.get("user_agent") for x in user_agent_rotator.get_user_agents()])
+user_agent = CycleVariable([x.get("user_agent") for x in user_agent_rotator.get_user_agents()])
 
 def get_headers():
     return {
@@ -66,30 +85,30 @@ def get_headers():
         "Connection": "keep-alive",
         "Accept": "*/*",
         "Referer": "https://consultapublica.car.gov.br/publico/estados/downloads",
-        "Host":	"consultapublica.car.gov.br",
+        "Host": "consultapublica.car.gov.br",
         "Priority": "u=0",
         "Sec-Fetch-Dest": "empty",
         "Sec-Fetch-Mode": "cors",
         "Sec-Fetch-Site": "same-origin",
     }
 
-
 def extract_zip_to_folder(zip_path, extract_to_folder):
     zip_path = Path(zip_path)
     extract_to_folder = Path(extract_to_folder)
     extract_to_folder.mkdir(parents=True, exist_ok=True)
-    with zipfile.ZipFile(zip_path, "r") as zip_ref:
-        zip_ref.extractall(extract_to_folder)
-
-def connect_db():
-    conn = psycopg2.connect(
-        dbname=secrets.dbname,
-        user=secrets.user,
-        password=secrets.password,
-        host=secrets.host,
-        port=secrets.port
-    )
-    return conn
+    zip_extracted = False
+    try:
+        with zipfile.ZipFile(zip_path, "r") as zip_ref:
+            zip_ref.extractall(extract_to_folder)
+        zip_extracted = True
+    except Exception as e:
+        print(e)
+    finally:
+        try:
+            os.remove(zip_path)
+        except Exception as e:
+            print(e)
+    return zip_extracted
 
 def create_statistics_table():
     conn = connect_db()
@@ -119,6 +138,33 @@ def create_statistics_table():
     conn.commit()
     cursor.close()
     conn.close()
+
+
+def create_database():
+    conn = connect_default_db()
+    conn.autocommit = True
+    cursor = conn.cursor()
+
+    db_name = os.getenv("POSTGRES_DB")
+    try:
+        cursor.execute(f"CREATE DATABASE {db_name};")
+        print(f"Database '{db_name}' created successfully.")
+    except Exception as e:
+        print(e)
+    finally:
+        cursor.close()
+        conn.close()
+
+    try:
+        conn = connect_db()
+        conn.autocommit = True
+        cursor = conn.cursor()
+        cursor.execute(f"CREATE EXTENSION postgis;")
+    except Exception as e:
+        print(e)
+    finally:
+        cursor.close()
+        conn.close()
 
 def main_table_structure(table_name):
     return sql.SQL("""
@@ -254,9 +300,9 @@ def insert_statistics_data(feature_count, release_date, layer, state_code):
             state_code.upper(),
             layer,
             release_date,
-            counts[0],  # count_active_features
-            0,
-            0,   # count_updated_features
+            counts[0],  # count active features
+            0, # todo count new features
+            0, # todo count updated features
             feature_count
         )
     ]
@@ -269,7 +315,6 @@ def insert_statistics_data(feature_count, release_date, layer, state_code):
     conn.close()
 
 def insert_data_batch(state, theme, batch, release_date):
-    print(f"Inserting batch {state} {theme}")
     conn = connect_db()
     cursor = conn.cursor()
     # Collect all car codes from the batch
@@ -378,15 +423,7 @@ def read_shapefile(shapefile_path):
             if geom is None:
                 continue
 
-            # Check if geometry is MultiPolygon
-            if geom.GetGeometryType() == ogr.wkbMultiPolygon:
-                # Loop through each polygon in the MultiPolygon
-                for i in range(geom.GetGeometryCount()):
-                    sub_geom = geom.GetGeometryRef(i)
-                    yield from process_geometry(feature, sub_geom)
-            else:
-                # Process single-part geometries
-                yield from process_geometry(feature, geom)
+            yield from process_geometry(feature, geom)
 
         except Exception as e:
             print(f"Error processing feature: {e}")
@@ -476,7 +513,7 @@ def create_temp_table(state, theme):
 def process_shapefiles_and_save_to_db(extracted_folder, state, theme, release_date):
 
     # Get total available RAM in bytes and divide by 10 for batch size
-    max_batch_size_bytes = psutil.virtual_memory().available * MAX_MEMORY_PERCENT_TO_USE
+    max_batch_size_bytes = psutil.virtual_memory().available * max_memory_percent_to_use
 
     extracted_folder = Path(extracted_folder)
     try:
@@ -497,7 +534,7 @@ def process_shapefiles_and_save_to_db(extracted_folder, state, theme, release_da
                 batch_size_bytes += feature["size"]
                 feature_count += 1
 
-                if batch_size_bytes >= max_batch_size_bytes or len(batch)>max_batch_size:
+                if batch_size_bytes >= max_batch_size_bytes or len(batch)>=max_batch_size:
                     # Submit a batch for insertion
                     insert_data_batch(state, theme, batch, release_date)
                     batch = []
@@ -538,8 +575,8 @@ def process_shapefiles_and_save_to_db(extracted_folder, state, theme, release_da
 def get_car( state, theme, out_folder):
     result = False
     car = Sicar(
-        use_http2=use_http2(),
-        proxy=proxy(),
+        use_http2=use_http2,
+        proxy=proxy,
         read_timeout=timeout,
         connect_timeout=timeout,
         headers=get_headers(),
@@ -561,8 +598,8 @@ def get_car( state, theme, out_folder):
             print(f"Error in download {state} {theme}: {e}")
             time.sleep(random.random() + random.random())
             car = Sicar(
-                use_http2=use_http2(),
-                proxy=proxy(),
+                use_http2=use_http2,
+                proxy=proxy,
                 read_timeout=timeout,
                 connect_timeout=timeout,
                 headers=get_headers(),
@@ -656,8 +693,10 @@ def process_state_theme_pair(state, theme, release_dates, done_list):
         result_path = result.as_posix()
 
         print("Extracting zip")
-        extract_zip_to_folder(result_path, out_folder)
-        os.remove(result_path)
+        extracted_zip = extract_zip_to_folder(result_path, out_folder)
+        if not extracted_zip:
+            raise Exception("zip not extractable")
+
         print("Creating schema and table")
         create_partition_and_table(state, theme)
         print("Processing shapefile")
@@ -670,8 +709,13 @@ def process_state_theme_pair(state, theme, release_dates, done_list):
 
 def main():
     car = Sicar(
-        use_http2=use_http2(), proxy=proxy(), read_timeout=timeout, connect_timeout=timeout, headers=get_headers())
+        use_http2=use_http2,
+        proxy=proxy,
+        read_timeout=timeout,
+        connect_timeout=timeout,
+        headers=get_headers())
 
+    create_database()
     create_statistics_table()
     release_dates = car.get_release_dates()
 
@@ -699,8 +743,6 @@ def main():
             return True
         time.sleep(60)
         return False
-
-
 
 if __name__=="__main__":
     main()

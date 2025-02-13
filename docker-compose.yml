@@ -1,0 +1,89 @@
+
+services:
+
+  etl:
+    container_name: etl-container
+    image: etl-image
+    restart: always
+    env_file:
+      - .env
+    network_mode: host
+    build:
+      args:
+        DOCKER_BUILDKIT: "0"
+      context: .
+      dockerfile: Dockerfile.etl
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_HOST: ${POSTGRES_HOST:-localhost}
+      POSTGRES_PORT: ${POSTGRES_PORT:-5433}
+      USE_PROXY: ${USE_PROXY:-True}
+      IP_PROXY: ${IP_PROXY:-http://localhost:3128}
+      MAX_WORKERS: ${MAX_WORKERS:-2}
+    depends_on:
+      - database
+
+  api:
+    container_name: api-container
+    image: api-image
+    restart: always
+    env_file:
+      - .env
+    network_mode: host
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_HOST: ${POSTGRES_HOST:-localhost}
+      POSTGRES_PORT: ${POSTGRES_PORT:-5433}
+      SECRET_KEY: ${API_SECRET_KEY}
+      API_KEYS: ${API_KEYS:-apikey123}
+      MAP_TOKENS_NO_EXPIRY: ${MAP_TOKEN_NO_EXPIRY}
+      GUNICORN_WORKERS: ${GUNICORN_WORKERS:-2}
+      GUNICORN_BIND: ${GUNICORN_BIND:-0.0.0.0:8000}
+      GUNICORN_LOGLEVEL: ${GUNICORN_LOGLEVEL:-info}
+    depends_on:
+      - etl
+      - database
+
+  app:
+    container_name: app-container
+    image: app-image
+    restart: always
+    env_file:
+      - .env
+    network_mode: host
+    build:
+      context: .
+      dockerfile: Dockerfile.app
+    environment:
+      API_KEY: ${API_KEY_FRONTEND:-apikey123}
+      BASE_URL: ${API_URL:-http://localhost:8000}
+      DEFAULT_CAR_CODE: ${DEFAULT_CAR_CODE}
+      CACHE_TTL_GET_LAYERS: ${CACHE_TTL_GET_LAYERS:-3600}
+    depends_on:
+      - api
+
+  database:
+    image: postgis/postgis:latest
+    container_name: db-container
+    restart: always
+    env_file:
+      - .env
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql-car/data
+
+volumes:
+  postgres_data:
+    driver: local
