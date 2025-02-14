@@ -30,9 +30,9 @@ docker build -t api-image -f Dockerfile.api .
 docker build -t app-image -f Dockerfile.app .
 
 # create .env with yours env vars
-docker run --name etl-container --restart=unless-stopped --network=host --env-file .env etl-image
-docker run --name api-container --restart=unless-stopped --network=host --env-file .env api-image
-docker run --name app-container --restart=unless-stopped --network=host --env-file .env app-image
+docker run -d --name etl-container --restart=unless-stopped --network=host --env-file .env etl-image
+docker run -d --name api-container --restart=unless-stopped --network=host --env-file .env api-image
+docker run -d --name app-container --restart=unless-stopped --network=host --env-file .env app-image
 ```
 
 check logs with
