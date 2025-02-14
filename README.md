@@ -1,6 +1,6 @@
 # CAR Viewer
 
-## Live car-viewer map
+## Live car-viewer map app
 https://car-viewer.streamlit.app
 
 
@@ -10,7 +10,7 @@ CAR is the Brazilian Ambiental Rural Registry which all farms must
 register ambiental status and plans.
 This is a big (over 200Gb and over 7 million rows) dataset and this project aims to donwload monthly data,
 store in postgres and serve by API with a minimal frontend to search and plot data on map.
-
+There is a PMTiles basemap with all polygons, being in development.
 
 ### Instalation
 Using Docker compose
@@ -20,14 +20,8 @@ cd car-viewer-foss4g
 docker compose up -d
 ```
 
-then check on browser running services on default links
-
-app
-http://localhost:8501
-
-api
-http://localhost:8000/docs
-
+then check on browser localhost on ports 8501 and 8000.
+Database on port 5433. For database you may change passwords.
 
 Using Dockerfile
 ```
