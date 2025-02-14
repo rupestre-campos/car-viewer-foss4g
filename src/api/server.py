@@ -1,14 +1,9 @@
 import os
 import json
-import httpx
 import asyncpg
 import asyncio
 import uvicorn
-from typing import Dict
 from collections import defaultdict
-from datetime import datetime, timedelta, timezone
-import jwt
-import random
 from fastapi import (
     FastAPI,
     HTTPException,
@@ -21,35 +16,24 @@ from fastapi.security.api_key import (
     APIKeyQuery,
     APIKey
 )
-from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, constr
 
-from starlette.requests import Request
-from starlette.responses import RedirectResponse, Response
+from starlette.responses import Response
 from starlette.middleware.cors import CORSMiddleware
 
-import secrets_config as secret
 from render_car import create_pdf_from_geojson, create_kmz_from_geojson
 
-PMTILES_PORT = 8081
-query_timeout = 30
+query_timeout = int(os.getenv("QUERY_TIMEOUT", "30"))
 
-# Replace with your actual PostgreSQL connection details
-DATABASE_NAME = secret.dbname
-DATABASE_USER = secret.user
-DATABASE_PASSWORD = secret.password
-DATABASE_HOST = secret.host
-DATABASE_PORT = secret.port
+DATABASE_HOST = os.getenv("POSTGRES_HOST", "localhost")
+DATABASE_PORT = os.getenv("POSTGRES_PORT", "5432")
+DATABASE_NAME = os.getenv("POSTGRES_DB", "car")
+DATABASE_USER = os.getenv("POSTGRES_USER", "postgres")
+DATABASE_PASSWORD = os.getenv("POSTGRES_PASSWORD", "postgres")
 
-API_KEYS = secret.api_keys
-MAP_TOKENS_NO_EXPIRY = secret.map_tokens_no_expiry
-
-nicfi_api_key = secret.nicfi_api_key
-SECRET_KEY = secret.secret_key
-JWT_VALID_SECONDS = 3600
-
-API_KEY_NAME = "API_KEY"
-api_key_query = APIKeyQuery(name=API_KEY_NAME, auto_error=False)
+API_KEYS = os.getenv("API_KEYS", "1234,5678").split(",")
+API_KEY_QUERY_NAME = os.getenv("API_KEY_QUERY_NAME", "API_KEY")
+api_key_query = APIKeyQuery(name=API_KEY_QUERY_NAME, auto_error=False)
 
 app = FastAPI()
 
@@ -60,9 +44,6 @@ app.add_middleware(
     allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"],
 )
-
-
-httpx_client = httpx.AsyncClient()
 
 async def get_db_conn():
     conn = await asyncpg.connect(
@@ -95,34 +76,6 @@ def get_api_key(
         return api_key_query
     else:
         raise HTTPException(status_code=403, detail="Could not validate credentials")
-
-# Helper function to create a JWT token
-def create_token(data: dict, expires_delta: timedelta):
-    to_encode = data.copy()
-    expire = datetime.now(tz=timezone.utc) + expires_delta
-    to_encode.update({"exp": expire})
-    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm="HS256")
-    return encoded_jwt
-
-# Dependency to verify the JWT token from the query parameter
-def verify_token_from_query(map_key: str):
-    if map_key in MAP_TOKENS_NO_EXPIRY:
-        return True
-    try:
-        payload = jwt.decode(map_key, SECRET_KEY, algorithms=["HS256"])
-        if payload["sub"] != "tiles_access":
-            raise HTTPException(status_code=403, detail="Invalid token")
-        return True
-    except jwt.ExpiredSignatureError:
-        raise HTTPException(status_code=401, detail="Token has expired")
-    except jwt.InvalidTokenError:
-        raise HTTPException(status_code=401, detail="Invalid token")
-
-@app.get("/", include_in_schema=False)
-async def redirect():
-    url = secret.frontend_url
-    response = RedirectResponse(url=url)
-    return response
 
 @app.get("/list-layers")
 async def list_layers(api_key: APIKey = Depends(get_api_key)):
@@ -282,59 +235,5 @@ async def intersecting_perimeters(
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-
-# Endpoint to get a token by providing an API key
-@app.get("/get-map-token")
-async def get_token(api_key: APIKey = Depends(get_api_key)):
-    token_expires = timedelta(seconds=JWT_VALID_SECONDS)  # Token valid for 1 day
-    token = create_token({"sub": "tiles_access"}, expires_delta=token_expires)
-
-    return {"token": token}
-
-@app.get("/tiles/{z}/{x}/{y}.pbf")
-async def get_tile(z: int, x: int, y: int, map_token: str = Query(..., description="Map token required for access")):
-    """Get area_imovel layer as Vector Tiles."""
-
-    if not map_token:
-        raise HTTPException(status_code=400, detail="MAP_TOKEN is required")
-
-    # Verify the token from the query param
-    verify_token_from_query(map_token)
-
-    pmtiles_url = f"http://localhost:{PMTILES_PORT}/area_imovel/{z}/{x}/{y}.mvt"
-
-    try:
-        response = await httpx_client.get(pmtiles_url)
-        response.raise_for_status()
-        return Response(content=response.content, media_type='application/x-protobuf')
-    except httpx.RequestError as e:
-        raise HTTPException(status_code=404, detail=f"Tile not found: {e}")
-
-def get_random_subdomain():
-    """
-    Returns a random subdomain from tiles0 to tiles3.
-    """
-    subdomains = ["tiles0", "tiles1", "tiles2", "tiles3"]
-    return random.choice(subdomains)
-
-@app.get("/image-tiles/{z}/{x}/{y}.png")
-async def get_tile(z: int, x: int, y: int, map_token: str = Query(..., description="Map token required for access")):
-    """Get nicfi images layer from planet."""
-
-    if not map_token:
-        raise HTTPException(status_code=400, detail="MAP_TOKEN is required")
-
-    # Verify the token from the query param
-    verify_token_from_query(map_token)
-    subdomain = get_random_subdomain()
-    tiles_url = f"https://{subdomain}.planet.com/basemaps/v1/planet-tiles/planet_medres_visual_2024-10_mosaic/gmap/{z}/{x}/{y}.png?api_key={nicfi_api_key}"
-
-    try:
-        response = await httpx_client.get(tiles_url)
-        response.raise_for_status()
-        return Response(content=response.content, media_type='image/png')
-    except httpx.RequestError as e:
-        raise HTTPException(status_code=404, detail=f"Tile not found: {e}")
-
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8005)

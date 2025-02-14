@@ -8,21 +8,22 @@ from streamlit_folium import st_folium
 from streamlit_navigation_bar import st_navbar
 from datetime import datetime
 
-import src.secrets_config as secret
 from unidecode import unidecode
+import os
 
-# Constants
-API_KEY = secret.api_key
-BASE_URL = secret.api_base_url
-CONTACT_URL = secret.api_contact_url
+API_KEY = os.getenv("API_KEY_FRONTEND", "1234")
+BASE_URL = os.getenv("API_URL", "http://localhost:8000")
+
+cache_ttl = int(os.getenv("CACHE_TTL", "300"))
+cache_ttl_get_layers  = int(os.getenv("CACHE_TTL_GET_LAYERS", "3600"))
+
+default_car_code = os.getenv("DEFAULT_CAR_CODE")
 
 st.set_page_config(page_title="Car Viewer", page_icon=":world_map:", layout="wide")
-urls = {"Contact": f"{BASE_URL}/contact"}
 option_nav_bar = st_navbar(
-    pages=["CAR Viewer", "Search on map", "Contact"],
+    pages=["CAR Viewer", "Search on map", ],
     selected="CAR Viewer",
-    options={"use_padding": True},
-    urls=urls
+    options={"use_padding": True}
 )
 
 # Function to validate car code
@@ -30,35 +31,33 @@ def validate_car_code(car_code):
     return len(car_code) == 43
 
 def get_layers_api():
-    url = f"{BASE_URL}/list-layers"
-    headers = {"API_KEY": API_KEY}
-    response = requests.get(url, headers=headers)
+    url = f"{BASE_URL}/list-layers?API_KEY={API_KEY}"
+    response = requests.get(url)
     if response.status_code == 200:
         return response.json()
     else:
         st.error(f"Failed to fetch data: {response.status_code}")
         return {}
 
-@st.cache_data(ttl=secret.cache_ttl_get_layers)
+@st.cache_data(ttl=cache_ttl_get_layers)
 def get_layers():
     layers_data = get_layers_api()
     return layers_data
 
 # Function to get GeoJSON data
-@st.cache_data(ttl=secret.cache_ttl, max_entries=100)
+@st.cache_data(ttl=cache_ttl, max_entries=5)
 def get_geojson(car_code):
-    url = f"{BASE_URL}/layers/{car_code}.geojson"
-    headers = {"API_KEY": API_KEY}
-    response = requests.get(url, headers=headers)
+    url = f"{BASE_URL}/layers/{car_code}.geojson?API_KEY={API_KEY}"
+    response = requests.get(url)
     if response.status_code == 200:
         return response.json()
     else:
         st.error(f"Failed to fetch data: {response.status_code}")
         return {}
 
-@st.cache_data(ttl=secret.cache_ttl, max_entries=100)
+@st.cache_data(ttl=cache_ttl, max_entries=5)
 def get_pdf(car_code, param):
-    url = f"{BASE_URL}/layers/{car_code}.pdf{param}"
+    url = f"{BASE_URL}/layers/{car_code}.pdf?API_KEY={API_KEY}{param}"
     headers = {"API_KEY": API_KEY}
     response = requests.get(url, headers=headers)
     if response.status_code == 200:
@@ -67,9 +66,9 @@ def get_pdf(car_code, param):
         st.error(f"Failed to fetch data: {response.status_code}")
         return {}
 
-@st.cache_data(ttl=secret.cache_ttl, max_entries=100)
+@st.cache_data(ttl=cache_ttl, max_entries=5)
 def get_kml(car_code, param):
-    url = f"{BASE_URL}/layers/{car_code}.kmz{param}"
+    url = f"{BASE_URL}/layers/{car_code}.kmz?API_KEY={API_KEY}{param}"
     headers = {"API_KEY": API_KEY}
     response = requests.get(url, headers=headers)
     if response.status_code == 200:
@@ -212,105 +211,6 @@ def parse_feature_condiction(condiction):
         return "Pendencies in register"
     return condiction
 
-def get_map_options():
-    options = '''{
-            rendererFactory: L.canvas.tile,
-            "maxNativeZoom":16,
-            "minNativeZoom":3,
-            "vectorTileLayerStyles": {
-                area_imovel: function(properties, zoom) {
-                    var status = properties.ind_status;
-
-                    if (status === 'AT') {
-                        if (zoom >=10 ) {
-                            return {
-                                "fill": true,
-                                "weight": 2,
-                                "fillColor": 'yellow',
-                                "color": 'yellow',
-                                "fillOpacity":0.5,
-                                "opacity":0.8
-                                };
-                        }
-                        return {
-                            "fill": true,
-                            "weight": 1,
-                            "fillColor": 'yellow',
-                            "color": 'yellow',
-                            "fillOpacity":0.5,
-                            "opacity":0.1
-                            };
-                    };
-                    if (status === 'PE') {
-                        if (zoom >=10 ) {
-                            return {
-                                "fill": true,
-                                "weight": 2,
-                                "fillColor": 'orange',
-                                "color": 'orange',
-                                "fillOpacity":0.5,
-                                "opacity":0.8
-                                };
-                        }
-                        return {
-                            "fill": true,
-                            "weight": 1,
-                            "fillColor": 'orange',
-                            "color": 'orange',
-                            "fillOpacity":0.5,
-                            "opacity":0.1
-                            };
-                    };
-                    if (status === 'SU') {
-                        if (zoom >=10 ) {
-                            return {
-                                "fill": true,
-                                "weight": 2,
-                                "fillColor": 'purple',
-                                "color": 'purple',
-                                "fillOpacity":0.5,
-                                "opacity":0.8
-                                };
-                        }
-                        return {
-                            "fill": true,
-                            "weight": 1,
-                            "fillColor": 'purple',
-                            "color": 'purple',
-                            "fillOpacity":0.5,
-                            "opacity":0.1
-                            };
-                    };
-                    if (status === 'CA') {
-                        if (zoom >=10 ) {
-                            return {
-                                "fill": true,
-                                "weight": 2,
-                                "fillColor": 'red',
-                                "color": 'red',
-                                "fillOpacity":0.5,
-                                "opacity":0.8
-                                };
-                        }
-                        return {
-                            "fill": true,
-                            "weight": 1,
-                            "fillColor": 'red',
-                            "color": 'red',
-                            "fillOpacity":0.5,
-                            "opacity":0.1
-                            };
-                    };
-                    return {
-                        "fill": true,
-                        "opacity":0
-                    }
-                }
-            }
-        }'''
-    return options
-
-
 def add_map_options(m):
     #folium.plugins.Geocoder(position="bottomright", add_marker=False).add_to(m)
     #folium.plugins.LocateControl(
@@ -355,20 +255,8 @@ def add_map_options(m):
         show=True
     )
     google_hybrid.add_to(m)
-    url_pmtiles = f"{BASE_URL}/tiles/{{z}}/{{x}}/{{y}}.pbf"
 
-    feature_group_area_imovel = folium.FeatureGroup(name="Area Imovel Brasil")
-
-    options = get_map_options()
-    vector_layer_area_imovel = folium.plugins.VectorGridProtobuf(
-        url_pmtiles,
-        "Area Imovel Brasil",
-        options,
-        overlay=True
-    )
-    feature_group_area_imovel.add_child(vector_layer_area_imovel)
-
-    return m, feature_group_area_imovel
+    return m
 
 def main():
 
@@ -392,7 +280,7 @@ def main():
     car_code = st.query_params.get("car_code")
 
     if not car_code:
-        car_code = secret.default_car_code
+        car_code = default_car_code
 
     if "intersect_results" not in st.session_state:
         st.session_state["intersect_results"] = []
@@ -444,7 +332,7 @@ def main():
             st.write("Download options")
             download_choice = st.radio("Content", options=["Perimeter", "All layers"], index=0)
             if download_choice == "Perimeter":
-                param = "?layer=area_imovel"
+                param = "&layer=area_imovel"
                 file_ending = ""
             if download_choice == "All layers":
                 param = ""
@@ -513,14 +401,13 @@ def main():
     search_result_box = st.empty()
     #vector_layer_area_imovel_pendency._template = custom_template
 
-    m, feature_group_area_imovel = add_map_options(m)
+    m = add_map_options(m)
 
     layer_control = folium.LayerControl()
     drawings = st_folium(
         m,
         use_container_width=True,
         returned_objects=["last_clicked"],
-        feature_group_to_add=feature_group_area_imovel,
         layer_control=layer_control
     )
     message_box.write(" ")
