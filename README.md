@@ -1,16 +1,13 @@
 # CAR Viewer
 
-## Live car-viewer map app
-https://car-viewer.streamlit.app
-
-
-#### Repository with system keep database with SICAR data
-
-CAR is the Brazilian Ambiental Rural Registry which all farms must
+SICAR is the Brazilian Ambiental Rural Registry System which all farms must
 register ambiental status and plans.
 This is a big (over 200Gb and over 7 million rows) dataset and this project aims to donwload monthly data,
 store in postgres and serve by API with a minimal frontend to search and plot data on map.
-There is a PMTiles basemap with all polygons, being in development.
+There is a PMTiles basemap with all polygons, being in development .
+
+## Demo car-viewer map app
+https://car-viewer.streamlit.app
 
 ### Instalation
 Using Docker compose
