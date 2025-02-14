@@ -35,7 +35,7 @@ API_KEYS = os.getenv("API_KEYS", "1234,5678").split(",")
 API_KEY_QUERY_NAME = os.getenv("API_KEY_QUERY_NAME", "API_KEY")
 api_key_query = APIKeyQuery(name=API_KEY_QUERY_NAME, auto_error=False)
 
-app = FastAPI()
+app = FastAPI(root_path="/api")
 
 app.add_middleware(
     CORSMiddleware,

@@ -61,7 +61,7 @@ services:
       dockerfile: Dockerfile.app
     environment:
       API_KEY: ${API_KEY_FRONTEND:-apikey123}
-      BASE_URL: ${API_URL:-http://localhost:8000}
+      BASE_URL: ${API_URL:-http://localhost:8000/api}
       DEFAULT_CAR_CODE: ${DEFAULT_CAR_CODE}
       CACHE_TTL_GET_LAYERS: ${CACHE_TTL_GET_LAYERS:-3600}
     depends_on:
