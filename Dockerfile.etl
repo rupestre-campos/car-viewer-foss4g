@@ -27,6 +27,9 @@ RUN apt update && apt install -y \
 ENV CPLUS_INCLUDE_PATH=/usr/include/gdal
 ENV C_INCLUDE_PATH=/usr/include/gdal
 
+# update pip
+pip install --upgrade pip
+
 # Get GDAL version and install within the venv
 RUN export GDAL_VERSION=$(gdal-config --version | awk -F. '{print $1"."$2"."$3}') && \
     echo "Detected GDAL version: $GDAL_VERSION" && \
