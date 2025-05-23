@@ -17,7 +17,7 @@ BASE_URL = os.getenv("API_URL", "http://localhost:8000")
 cache_ttl = int(os.getenv("CACHE_TTL", "300"))
 cache_ttl_get_layers  = int(os.getenv("CACHE_TTL_GET_LAYERS", "3600"))
 
-default_car_code = os.getenv("DEFAULT_CAR_CODE")
+default_car_code = os.getenv("DEFAULT_CAR_CODE", "ABCD")
 
 st.set_page_config(page_title="Car Viewer", page_icon=":world_map:", layout="wide")
 option_nav_bar = st_navbar(
@@ -308,6 +308,9 @@ def main():
                 reset_button = st.button("Reset results")
                 if reset_button:
                     st.session_state["intersect_results"] = []
+
+        if car_code is None:
+            car_code =  ""
 
         car_code = car_code.strip().upper().replace(".","").replace(" ","")
         st.query_params["car_code"] = car_code
