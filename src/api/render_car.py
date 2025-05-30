@@ -5,6 +5,41 @@ from osgeo import ogr, osr, gdal
 import matplotlib.colors as mcolors
 import simplekml
 from datetime import datetime
+import tempfile
+import zipfile
+from io import BytesIO
+
+def create_shapefile_from_geojson(geojson: dict, car_code: str) -> bytes:
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        geojson_path = os.path.join(tmpdir, f"{car_code}.geojson")
+        shp_path = os.path.join(tmpdir, f"{car_code}.shp")
+
+        with open(geojson_path, 'w', encoding='utf-8') as f:
+            json.dump(geojson, f)
+
+        drv = ogr.GetDriverByName("ESRI Shapefile")
+        if os.path.exists(shp_path):
+            drv.DeleteDataSource(shp_path)
+
+        ds = drv.CreateDataSource(shp_path)
+        ogr_ds = ogr.Open(geojson_path)
+        geojson_layer = ogr_ds.GetLayer()
+
+        ds.CopyLayer(geojson_layer, geojson_layer.GetName())
+
+        ds = None
+        ogr_ds = None
+
+        mem_zip = BytesIO()
+        with zipfile.ZipFile(mem_zip, 'w', zipfile.ZIP_DEFLATED) as zipf:
+            for ext in [".shp", ".shx", ".dbf", ".prj", ".cpg"]:
+                path = os.path.join(tmpdir, f"{car_code}{ext}")
+                if os.path.exists(path):
+                    zipf.write(path, arcname=f"{car_code}{ext}")
+        mem_zip.seek(0)
+        return mem_zip.read()
+
 
 def get_style_rules():
     return {
