@@ -177,7 +177,6 @@ def main_table_structure(table_name):
             feature_hash UUID,
             geom_hash UUID,
             properties_hash UUID,
-            active INTEGER,
             geom geometry(geometry, 4326),
             properties JSONB,
             PRIMARY KEY (id, state_code)
@@ -237,17 +236,6 @@ def create_indices(state, theme):
         table=sql.Identifier(f"{theme.lower()}_{state.lower()}")
     )
     cursor.execute(create_release_date_index_query)
-
-    # Index on active column
-    create_active_index_query = sql.SQL("""
-        CREATE INDEX IF NOT EXISTS {index_active}
-        ON {table} (active);
-    """).format(
-        index_active=sql.Identifier(f"{theme.lower()}_{state.lower()}_active_idx"),
-        table=sql.Identifier(f"{theme.lower()}_{state.lower()}")
-    )
-    cursor.execute(create_active_index_query)
-
     conn.commit()
     cursor.close()
     conn.close()
@@ -329,7 +317,6 @@ def insert_data_batch(state, theme, batch, release_date):
             feature["hash"],
             feature["geom_hash"],
             feature["properties_hash"],
-            1,
             feature["geometry"],
             Json(feature["properties"])
         )
@@ -347,7 +334,6 @@ def insert_data_batch(state, theme, batch, release_date):
                 feature_hash,
                 geom_hash,
                 properties_hash,
-                active,
                 geom,
                 properties)
             VALUES %s
@@ -363,41 +349,52 @@ def insert_data_batch(state, theme, batch, release_date):
 def switch_active_version(state, theme, release_date):
     conn = connect_db()
     cursor = conn.cursor()
-    # Use a single query with a transaction block to update the active status
+
     table_name = f"{theme.lower()}_{state.lower()}"
     temp_table_name = f"{theme.lower()}_temp_{state.lower()}"
-    switch_active_version_query = sql.SQL("""
-        BEGIN;
-
-        -- Deactivate all currently active records
-
-        TRUNCATE {table};
-
-        -- Activate the latest record for each car_code
-        INSERT INTO {table}
-        SELECT * FROM {table_temp};
-
-        COMMIT;
-    """).format(
-        table=sql.Identifier(table_name),
-        table_temp=sql.Identifier(temp_table_name)
-    )
+    parent_table_name = theme.lower()  # Assuming all partitions belong to this table
+    temp_parent_table_name = theme.lower()
 
     done = False
     try:
-        # Execute the transaction
-        cursor.execute(switch_active_version_query, (table_name,))
-        # Commit the transaction
-        delete_temp_table(state, theme)
-        conn.commit()
+        cursor.execute(sql.SQL("BEGIN;"))
+
+        # Detach the temp table from its parent (if it is already attached)
+        cursor.execute(sql.SQL("ALTER TABLE {temp_parent} DETACH PARTITION {temp_table};").format(
+            temp_parent=sql.Identifier(temp_parent_table_name),
+            temp_table=sql.Identifier(temp_table_name)
+        ))
+
+        # Drop the existing old partition table (you can truncate instead if you want to preserve structure)
+        cursor.execute(sql.SQL("DROP TABLE IF EXISTS {table} CASCADE;").format(
+            table=sql.Identifier(table_name)
+        ))
+
+        # Rename the temp table to become the active one
+        cursor.execute(sql.SQL("ALTER TABLE {temp_table} RENAME TO {table};").format(
+            temp_table=sql.Identifier(temp_table_name),
+            table=sql.Identifier(table_name)
+        ))
+
+        # Attach the newly renamed table back as a partition
+        # You MUST know the partition range or list constraint here:
+        cursor.execute(sql.SQL("""
+            ALTER TABLE {parent} ATTACH PARTITION {table}
+            FOR VALUES IN (%s);
+        """).format(
+            parent=sql.Identifier(parent_table_name),
+            table=sql.Identifier(table_name)
+        ), (state.upper(),))  # assuming partitioning is LIST(state)
+
+        cursor.execute(sql.SQL("COMMIT;"))
         done = True
+
     except Exception as e:
-        # If an error occurs, rollback the transaction
         conn.rollback()
         print(f"An error occurred on switch versions: {e}")
 
     finally:
-        # Always close the cursor
+        #delete_temp_table(state, theme)  # assuming this won't break if the table was renamed
         cursor.close()
         conn.close()
     return done
