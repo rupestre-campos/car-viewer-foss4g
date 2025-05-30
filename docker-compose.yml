@@ -49,24 +49,6 @@ services:
       - etl
       - database
 
-  app:
-    container_name: app-container
-    image: app-image
-    restart: always
-    env_file:
-      - .env
-    network_mode: host
-    build:
-      context: .
-      dockerfile: Dockerfile.app
-    environment:
-      API_KEY: ${API_KEY_FRONTEND:-apikey123}
-      BASE_URL: ${API_URL:-http://localhost:8000/api}
-      DEFAULT_CAR_CODE: ${DEFAULT_CAR_CODE}
-      CACHE_TTL_GET_LAYERS: ${CACHE_TTL_GET_LAYERS:-3600}
-    depends_on:
-      - api
-
   database:
     image: postgis/postgis:latest
     container_name: db-container
