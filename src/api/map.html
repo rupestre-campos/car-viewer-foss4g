@@ -1,0 +1,641 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8" />
+    <title>MapLibre Vector + Raster Layers</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <script src="https://unpkg.com/maplibre-gl@2.4.0/dist/maplibre-gl.js"></script>
+    <link href="https://unpkg.com/maplibre-gl@2.4.0/dist/maplibre-gl.css" rel="stylesheet" />
+    <script src="https://cdn.jsdelivr.net/npm/@turf/turf@6/turf.min.js"></script>
+
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            height: 100%;
+            width: 100%;
+        }
+
+        #map {
+            position: absolute;
+            top: 0;
+            left: 0;
+            bottom: 0;
+            right: 0;
+            z-index: 0; /* Ensure it's behind the controls */
+        }
+
+        #layerControl {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            z-index: 10; /* Make sure it's above the map */
+            background: white;
+            padding: 6px 10px;
+            border-radius: 6px;
+            box-shadow: 0 0 5px rgba(0, 0, 0, 0.3);
+            font-family: sans-serif;
+        }
+
+        .layer-toggle {
+            display: block;
+            margin: 5px 0;
+            cursor: pointer;
+        }
+        .maplibregl-popup-content {
+            width: 450px;          /* fixed width */
+        }
+        #searchControl {
+            display: flex;
+            flex-direction: column;
+            gap: 8px; /* optional spacing between children */
+        }
+
+    </style>
+
+</head>
+
+<body>
+    <div id="searchControl" style="position:absolute; top:10px; left:10px; z-index:10; background:white; padding:6px 10px; border-radius:6px; box-shadow:0 0 5px rgba(0,0,0,0.3); font-family:sans-serif; display: flex; align-items: center; gap: 8px;">
+        <div id="search-bar-row">
+            <input id="carCodeInput" type="text" placeholder="Input CAR Code or coordinate XY" style="width: 380px;" />
+            <button id="searchBtn">Search</button>
+            <span id="error-msg" style="color: red; display: none;"></span>
+          </div>
+        <!-- Buttons will be added here dynamically -->
+    </div>
+
+    <div id="map"></div>
+    <div id="layerControl">
+        <label class="layer-toggle"><input type="radio" name="baselayer" value="osm"> OpenStreetMap</label>
+        <label class="layer-toggle"><input type="radio" name="baselayer" value="satellite"> Google Satellite</label>
+        <label class="layer-toggle"><input type="radio" name="baselayer" value="hybrid" checked> Google Hybrid</label>
+        <label class="layer-toggle" style="margin-top: 5px;">
+            <input type="checkbox" id="vectorToggle" checked> Basemap CAR
+        </label>
+    </div>
+
+    <div id="layer-toggle" style="position:absolute; bottom:10px; left:10px; background:white; padding:5px;"></div>
+
+<script>
+    const baseUrl = '{{BASE_URL}}';
+    const token = '{{TOKEN}}';
+    const vectorLayerUrl = `/tiles/{z}/{x}/{y}.pbf?token=${token}`;
+    let currentGeoJsonLayers = [];
+
+    const map = new maplibregl.Map({
+        container: 'map',
+        style: {
+            version: 8,
+            sources: {
+                osm: {
+                    type: 'raster',
+                    tiles: [
+                        'https://a.tile.openstreetmap.org/{z}/{x}/{y}.png',
+                        'https://b.tile.openstreetmap.org/{z}/{x}/{y}.png',
+                        'https://c.tile.openstreetmap.org/{z}/{x}/{y}.png'
+                    ],
+                    tileSize: 256,
+                    attribution: '© OpenStreetMap contributors'
+                },
+                satellite: {
+                    type: 'raster',
+                    tiles: ['https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}'],
+                    tileSize: 256,
+                    attribution: '© Google Satellite'
+                },
+                hybrid: {
+                    type: 'raster',
+                    tiles: ['https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}'],
+                    tileSize: 256,
+                    attribution: '© Google Hybrid'
+                },
+                mvt_source: {
+                    type: "vector",
+                    tiles: [ vectorLayerUrl],
+                    maxzoom: 16,
+                    minzoom: 3
+                }
+            },
+            layers: [
+                {
+                    id: "base-osm",
+                    type: "raster",
+                    source: "osm",
+                    layout: { visibility: "none" }
+                },
+                {
+                    id: "base-satellite",
+                    type: "raster",
+                    source: "satellite",
+                    layout: { visibility: "none" }
+                },
+                {
+                    id: "base-hybrid",
+                    type: "raster",
+                    source: "hybrid",
+                    layout: { visibility: "visible" }
+                },
+                {
+                    id: "car-vector-layer",
+                    type: "fill",
+                    source: "mvt_source",
+                    "source-layer": "area_imovel",
+                    paint: {
+                        "fill-color": [
+                            "match",
+                            ["get", "ind_status"],
+                            "AT", "yellow",
+                            "PE", "orange",
+                            "SU", "purple",
+                            "CA", "red",
+                            "transparent"
+                        ],
+                        "fill-opacity": [
+                            "step",
+                            ["zoom"],
+                            0.1,
+                            10, 0.3
+                        ]
+                    }
+                },
+                {
+                    id: "car-line-layer",
+                    type: "line",
+                    source: "mvt_source",
+                    "source-layer": "area_imovel",
+                    paint: {
+                        "line-color": [
+                            "match",
+                            ["get", "ind_status"],
+                            "AT", "yellow",
+                            "PE", "orange",
+                            "SU", "purple",
+                            "CA", "red",
+                            "transparent"
+                        ],
+                        "line-opacity": [
+                            "step",
+                            ["zoom"],
+                            0.0,
+                            10, 0.8
+                        ],
+                        "line-width": [
+                            "step",
+                            ["zoom"],
+                            0.0,
+                            10, 1
+                        ]
+                    }
+                }
+            ]
+        },
+        center: [-54, -14],
+        zoom: 4
+    });
+
+    // Toggle base layers
+    document.querySelectorAll('input[name="baselayer"]').forEach(input => {
+        input.addEventListener('change', function () {
+            map.setLayoutProperty('base-osm', 'visibility', this.value === 'osm' ? 'visible' : 'none');
+            map.setLayoutProperty('base-satellite', 'visibility', this.value === 'satellite' ? 'visible' : 'none');
+            map.setLayoutProperty('base-hybrid', 'visibility', this.value === 'hybrid' ? 'visible' : 'none');
+        });
+    });
+
+    document.getElementById('vectorToggle').addEventListener('change', function () {
+        const show = this.checked;
+        const layerId = 'car-vector-layer';
+        const layerIdLine = 'car-line-layer';
+        if (map.getLayer(layerId)) {
+            map.setLayoutProperty(layerId, 'visibility', show ? 'visible' : 'none');
+        }
+
+        if (map.getLayer(layerIdLine)) {
+            map.setLayoutProperty(layerIdLine, 'visibility', show ? 'visible' : 'none');
+        }
+    });
+
+    map.addControl(new maplibregl.NavigationControl());
+
+    // Create a popup, but don't add it to the map yet
+    const popup = new maplibregl.Popup({
+    closeButton: true,
+    closeOnClick: true
+    });
+
+    map.on('click', 'car-vector-layer', (e) => {
+        if (!e.features || e.features.length === 0) return;
+
+        const rows = e.features.map(f => {
+        const p = f.properties;
+        return `
+            <tr>
+                <td style="border: 1px solid #ccc; padding: 4px; writing-mode: horizontal-tb; transform: none;">
+                    ${p.ind_status}
+                </td>
+                <td style="border: 1px solid #ccc; padding: 4px; white-space: nowrap; word-break: normal;">
+                    <button class="popup-search-btn" data-code="${p.car_code}" style="
+                        background: none;
+                        border: none;
+                        padding: 0;
+                        color: #1d4ed8;
+                        text-decoration: underline;
+                        cursor: pointer;
+                        font-size: 14px;
+                        white-space: nowrap;   /* Prevent line breaks */
+                        overflow: hidden;      /* Hide overflow if needed */
+                        text-overflow: ellipsis; /* Show ... if too long */
+                    ">
+                        ${p.car_code}
+                    </button>
+                </td>
+            </tr>`;
+    });
+
+
+        // Complete HTML table
+        const html = `
+  <div style="max-width:370px;">
+    <table style="border-collapse: collapse; width: 100%;">
+      <thead>
+        <tr>
+            <th style="border: 1px solid #ccc; padding: 4px; text-align: left; writing-mode: horizontal-tb; transform: none;">
+                Status
+            </th>
+          <th style="border: 1px solid #ccc; padding: 4px; text-align: left;">CAR Code</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${rows.join('')}
+      </tbody>
+    </table>
+  </div>`;
+
+        popup
+            .setLngLat(e.lngLat)
+            .setHTML(html)
+            .addTo(map);
+
+
+            setTimeout(() => {
+    const buttons = document.querySelectorAll('.popup-search-btn');
+    buttons.forEach(btn => {
+        btn.addEventListener('click', (event) => {
+            event.stopPropagation(); // prevent map click behavior
+            const code = btn.getAttribute('data-code');
+            if (code) {
+                const input = document.getElementById('carCodeInput');
+                input.value = code;
+                document.getElementById('searchBtn').click();
+                popup.remove();  // optional
+            }
+        });
+    });
+}, 0);
+
+        });
+
+
+
+
+    // Change cursor to pointer when hovering over area_imovel polygons
+    map.on('mouseenter', 'car-vector-layer', () => {
+    map.getCanvas().style.cursor = 'pointer';
+    });
+    map.on('mouseleave', 'car-vector-layer', () => {
+    map.getCanvas().style.cursor = '';
+    });
+
+
+    function getStyleRules() {
+        return {
+            hidrografia: { color: "blue", fillColor: "blue", fillOpacity: 0.6, opacity: 0.5, weight: 0 },
+            area_imovel: { color: "yellow", fillColor: "white", fillOpacity: 0.01, weight: 3, opacity: 1 },
+            apps: { color: "red", fillColor: "red", fillOpacity: 0.3, opacity: 0.5, weight: 0.8 },
+            reserva_legal: { color: "green", fillColor: "green", fillOpacity: 0.4, opacity: 0.8, weight: 3 },
+            area_consolidada: { color: "lightyellow", fillColor: "lightyellow", fillOpacity: 0.3, opacity: 0.5, weight: 0 },
+            uso_restrito: { color: "orange", fillColor: "orange", fillOpacity: 0.5, opacity: 0.5, weight: 0 },
+            servidao_administrativa: { color: "black", fillColor: "black", fillOpacity: 0.5, opacity: 0.5, weight: 1 },
+            area_pousio: { color: "orange", fillColor: "orange", fillOpacity: 0.5, opacity: 0.5, weight: 0 },
+            vegetacao_nativa: { color: "lightgreen", fillColor: "lightgreen", fillOpacity: 0.4, opacity: 0.3, weight: 3 }
+        };
+    }
+
+    function getStyleByCodTema(cod_tema, styleRules) {
+        cod_tema = cod_tema.toLowerCase();
+        if (styleRules[cod_tema]) return styleRules[cod_tema];
+        if (cod_tema.includes("app")) return styleRules["apps"];
+        if (cod_tema.includes("arl")) return styleRules["reserva_legal"];
+        if (cod_tema.includes("reservatorio") || cod_tema.includes("rio")) return styleRules["hidrografia"];
+        if (cod_tema.includes("servidao") || cod_tema.includes("publica")) return styleRules["servidao_administrativa"];
+        if (cod_tema.includes("uso_restrito")) return styleRules["uso_restrito"];
+        return { color: "purple", fillColor: "purple", fillOpacity: 0.5, opacity: 0.5 };
+    }
+
+    function toggleLayer(layerId, visible) {
+    if (map.getLayer(layerId)) {
+        map.setLayoutProperty(layerId, 'visibility', visible ? 'visible' : 'none');
+        map.setLayoutProperty(layerId+'-line', 'visibility', visible ? 'visible' : 'none');
+    } else {
+        console.warn(`Layer not found: ${layerId}`);
+    }
+}
+
+function addLayerToggles(layerNames, styleRules) {
+    const legendDiv = document.getElementById('layer-toggle');
+
+    // Create master toggle for all vector layers
+    const masterToggleLabel = document.createElement('label');
+    masterToggleLabel.style.display = 'flex';
+    masterToggleLabel.style.alignItems = 'center';
+    masterToggleLabel.style.gap = '6px';
+    masterToggleLabel.style.marginBottom = '10px';
+
+    const masterCheckbox = document.createElement('input');
+    masterCheckbox.type = 'checkbox';
+    masterCheckbox.checked = true;
+
+    const masterText = document.createTextNode('Show/hide All');
+
+    masterToggleLabel.appendChild(masterCheckbox);
+    masterToggleLabel.appendChild(masterText);
+    legendDiv.appendChild(masterToggleLabel);
+
+    // Add individual toggles
+    layerNames.forEach(name => {
+        const layerId = `layer-${name}`;
+
+        const label = document.createElement('label');
+        label.style.display = 'flex';
+        label.style.alignItems = 'center';
+        label.style.gap = '6px';
+        label.style.marginBottom = '4px';
+
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.checked = true;
+        checkbox.setAttribute('data-layer', layerId);
+
+        checkbox.addEventListener('change', function () {
+            toggleLayer(layerId, this.checked);
+        });
+
+        const style = getStyleByCodTema(name, styleRules);
+        const color = style.fillColor || style.color || '#888';
+
+        const swatch = document.createElement('span');
+        swatch.style.background = color;
+        swatch.style.width = '15px';
+        swatch.style.height = '15px';
+        swatch.style.display = 'inline-block';
+        const layerNameShow = name.replace(/_/g, ' ');
+        const capitalizedText = layerNameShow.charAt(0).toUpperCase() + layerNameShow.slice(1);
+        const text = document.createTextNode(capitalizedText);
+
+        label.appendChild(checkbox);
+        label.appendChild(swatch);
+        label.appendChild(text);
+
+        legendDiv.appendChild(label);
+    });
+
+    // Handle master checkbox change to toggle all
+    masterCheckbox.addEventListener('change', function () {
+        const show = this.checked;
+        const checkboxes = legendDiv.querySelectorAll('input[type="checkbox"][data-layer]');
+        checkboxes.forEach(cb => {
+            cb.checked = show;
+            toggleLayer(cb.getAttribute('data-layer'), show);
+        });
+    });
+}
+function removeGeoJsonLayers() {
+  currentGeoJsonLayers.forEach(layerId => {
+    const sourceId = layerId.replace("layer-", "source-");
+
+    if (map.getLayer(layerId)) {
+      map.removeLayer(layerId);
+    }
+    if (map.getLayer(layerId+'-line')) {
+      map.removeLayer(layerId+'-line');
+    }
+    if (map.getSource(sourceId)) {
+      map.removeSource(sourceId);
+    }
+
+  });
+  currentGeoJsonLayers = []; // Reset the tracking list
+}
+function clearLayerToggleBox() {
+  const container = document.getElementById("layer-toggle");
+  if (container) {
+    container.innerHTML = ""; // Removes all children
+  }
+}
+function addDownloadButtons(car_code, token, param = '') {
+    const searchContainer = document.getElementById('searchControl');
+
+    // Ensure vertical layout
+    searchContainer.style.display = 'flex';
+    searchContainer.style.flexDirection = 'column';
+    searchContainer.style.gap = '8px'; // space between search and buttons
+
+    // Remove old buttons
+    const oldButtons = document.getElementById('download-buttons-inline');
+    if (oldButtons) oldButtons.remove();
+
+    // Create new horizontal button group
+    const buttonGroup = document.createElement('div');
+    buttonGroup.id = 'download-buttons-inline';
+    buttonGroup.style.display = 'flex';
+    buttonGroup.style.flexDirection = 'row';
+    buttonGroup.style.gap = '6px';
+
+    const createButton = (label, url, filename = null, newTab = true) => {
+        const btn = document.createElement('button');
+        btn.textContent = label;
+        btn.style.padding = '4px 8px';
+        btn.style.border = '1px solid #ccc';
+        btn.style.borderRadius = '4px';
+        btn.style.background = '#f0f0f0';
+        btn.style.cursor = 'pointer';
+        btn.onclick = async () => {
+            if (filename && !newTab) {
+                // Fetch and force download
+                const response = await fetch(url);
+                const blob = await response.blob();
+                const a = document.createElement('a');
+                a.href = URL.createObjectURL(blob);
+                a.download = filename;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+            } else {
+                // Open in new tab or download via normal link
+                const a = document.createElement('a');
+                a.href = url;
+                if (filename) a.download = filename;
+                if (newTab) a.target = '_blank';
+                a.click();
+            }
+        }
+        return btn;
+    };
+
+    const base = `/layers/${car_code}`;
+
+    buttonGroup.appendChild(createButton('SHP', `${base}.shp?token=${token}${param}`, `${car_code}.zip`, null, false));
+    buttonGroup.appendChild(createButton('PDF', `${base}.pdf?token=${token}${param}`, `${car_code}.pdf`, null, false));
+    buttonGroup.appendChild(createButton('GeoJSON', `${base}.geojson?token=${token}`, `${car_code}.geojson`, null, false));
+    buttonGroup.appendChild(createButton('KML', `${base}.kmz?token=${token}${param}`, `${car_code}.kmz`, null, false));
+    buttonGroup.appendChild(createButton('Demonstrativo', `https://car.gov.br/#/consultar/${car_code}`, null, true));
+
+    searchContainer.appendChild(buttonGroup);
+}
+
+    document.getElementById('searchBtn').addEventListener('click', () => {
+        document.getElementById('error-msg').style.display = 'none';
+        const inputRaw = document.getElementById('carCodeInput').value.trim();
+        if (!inputRaw) {
+            const errorMsg = document.getElementById('error-msg');
+            errorMsg.textContent = 'Not found';
+            errorMsg.style.display = 'inline';
+            return;
+        }
+        // Step 1: Replace comma decimals with dot
+        const normalized = inputRaw.replace(/(\d),(\d)/g, '$1.$2');
+
+        // Step 2: Match "number separator number"
+        const coordRegex = /^-?\d+(\.\d+)?[\s,]+-?\d+(\.\d+)?$/;
+
+        if (coordRegex.test(normalized)) {
+            const [x, y] = normalized.split(/[\s,]+/).map(Number);
+
+            if (!isNaN(x) && !isNaN(y)) {
+
+                map.flyTo({
+                    center: [x, y],
+                    zoom: 15
+                });
+
+                new maplibregl.Marker()
+                    .setLngLat([x, y])
+                    .addTo(map);
+                return;
+            } else {
+                const errorMsg = document.getElementById('error-msg');
+                errorMsg.textContent = 'Invalid coordinates';
+                errorMsg.style.display = 'inline';
+                return;
+            }
+        }
+
+    fetch(`/layers/${inputRaw}.geojson?token=${token}`)
+        .then(response => {
+            if (!response.ok) throw new Error(`Error ${response.status}`);
+            return response.json();
+        })
+        .then(data => {
+            removeGeoJsonLayers();
+            clearLayerToggleBox();
+            addDownloadButtons(inputRaw, token)
+            const styleRules = getStyleRules();
+            const bbox = turf.bbox(data);
+            map.fitBounds(bbox, { padding: 40 });
+
+            const grouped = {};
+            data.features.forEach(f => {
+                const tema = (f.properties.cod_tema || 'outros').toLowerCase();
+                if (!grouped[tema]) grouped[tema] = [];
+                grouped[tema].push(f);
+            });
+            data = null;
+
+            Object.keys(grouped).forEach(tema => {
+            const sourceId = `source-${tema}`;
+            const layerId = `layer-${tema}`;
+            const layerIdLine = `layer-${tema}-line`;
+            const features = grouped[tema];
+
+            map.addSource(sourceId, {
+                type: 'geojson',
+                data: {
+                type: 'FeatureCollection',
+                features: features
+                }
+            });
+
+            const style = getStyleByCodTema(tema, styleRules);
+
+            map.addLayer({
+                id: layerId,
+                type: 'fill',
+                source: sourceId,
+                layout: {},
+                paint: {
+                'fill-color': style.fillColor || style.color,
+                'fill-opacity': style.fillOpacity || 0.5,
+                'fill-outline-color': style.color || '#000000',
+                }
+            });
+            map.addLayer({
+                id: layerIdLine,
+                type: 'line',
+                source: sourceId,
+                layout: {},
+                paint: {
+                'line-color': style.color || '#000000',
+                'line-opacity': style.opacity || 0.5,
+                'line-width': style.width || 1,
+                }
+            });
+            currentGeoJsonLayers.push(layerId);
+            // Add interactivity (highlight + popup)
+            const popupLayer =  new maplibregl.Popup({
+                closeButton: true,
+                closeOnClick: true
+                })
+
+            map.on('click', layerId, e => {
+                if (!e.features || e.features.length === 0) return;
+
+                let popupHtml = "";
+
+                e.features.forEach(f => {
+                    const props = f.properties;
+                    for (const [k, v] of Object.entries(props)) {
+                        popupHtml += `<b>${k}:</b> ${v}<br>`;
+                    }
+                    popupHtml += "<hr>";  // Optional: separator between features
+                });
+
+                popupLayer
+                    .setLngLat(e.lngLat)
+                    .setHTML(popupHtml)
+                    .addTo(map);
+            });
+
+
+            map.on('mouseenter', layerId, () => {
+                map.getCanvas().style.cursor = 'pointer';
+            });
+            map.on('mouseleave', layerId, () => {
+                map.getCanvas().style.cursor = '';
+            });
+            });
+
+            // Add layer toggle UI
+            addLayerToggles(Object.keys(grouped), styleRules);
+
+        })
+        .catch(error => {
+            const errorMsg = document.getElementById('error-msg');
+            errorMsg.textContent = 'Not found';
+            errorMsg.style.display = 'inline';  // show the message
+        });
+});
+
+</script>
+</body>
+</html>

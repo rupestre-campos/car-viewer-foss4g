@@ -30,6 +30,8 @@ from pydantic import BaseModel, constr
 from starlette.responses import Response
 from starlette.middleware.cors import CORSMiddleware
 
+import httpx
+
 from render_car import create_pdf_from_geojson, create_kmz_from_geojson, create_shapefile_from_geojson
 
 query_timeout = int(os.getenv("QUERY_TIMEOUT", "30"))
@@ -40,6 +42,7 @@ DATABASE_NAME = os.getenv("POSTGRES_DB", "car")
 DATABASE_USER = os.getenv("POSTGRES_USER", "postgres")
 DATABASE_PASSWORD = os.getenv("POSTGRES_PASSWORD", "postgres")
 
+PMTILES_SERVER_URL = os.getenv("PMTILES_SERVER_URL", "http://localhost:8081")
 API_KEYS = os.getenv("API_KEYS", "1234,5678").split(",")
 
 JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "ABCD")
@@ -60,6 +63,8 @@ app.add_middleware(
 
 
 db_pool: Pool = None
+
+httpx_client = httpx.AsyncClient()
 
 async def init_db_pool():
     global db_pool
@@ -130,6 +135,13 @@ def verify_token_from_query(token: str):
     except jwt.InvalidTokenError:
         raise HTTPException(status_code=401, detail="Invalid token")
 
+with open("map.html", "r") as file:
+    html_template = file.read()
+
+@app.get("/", include_in_schema=False)
+async def serve_main_page():
+    token = create_token()
+    html_content = html_content.replace("{{TOKEN}}", token)
 
 @app.get("/get-token")
 async def get_token(api_key: APIKey = Depends(get_api_key)):
@@ -316,6 +328,26 @@ async def intersecting_perimeters(
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/tiles/{z}/{x}/{y}.pbf")
+async def get_tile(z: int, x: int, y: int, token: str = Query(..., description="token required for access")):
+    """Get area_imovel layer as Vector Tiles."""
+
+    if not token:
+        raise HTTPException(status_code=400, detail="TOKEN is required")
+
+    # Verify the token from the query param
+    verify_token_from_query(token)
+
+    pmtiles_url = f"{PMTILES_SERVER_URL}/area_imovel/{z}/{x}/{y}.mvt"
+
+    try:
+        response = await httpx_client.get(pmtiles_url)
+        response.raise_for_status()
+        return Response(content=response.content, media_type='application/x-protobuf')
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=404, detail=f"Tile not found: {e}")
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8005)
