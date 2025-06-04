@@ -345,7 +345,6 @@ def insert_data_batch(state, theme, batch, release_date):
 
     cursor.close()
     conn.close()
-
 def switch_active_version(state, theme, release_date):
     conn = connect_db()
     cursor = conn.cursor()
@@ -353,7 +352,7 @@ def switch_active_version(state, theme, release_date):
     table_name = f"{theme.lower()}_{state.lower()}"
     temp_table_name = f"{theme.lower()}_temp_{state.lower()}"
     parent_table_name = theme.lower()  # Assuming all partitions belong to this table
-    temp_parent_table_name = theme.lower()
+    temp_parent_table_name = f"{theme.lower()}_temp"
 
     done = False
     try:
@@ -361,10 +360,14 @@ def switch_active_version(state, theme, release_date):
 
         # Detach the temp table from its parent (if it is already attached)
         cursor.execute(sql.SQL("ALTER TABLE {temp_parent} DETACH PARTITION {temp_table};").format(
+            temp_parent=sql.Identifier(parent_table_name),
+            temp_table=sql.Identifier(table_name)
+        ))
+        # Detach the temp table from its parent (if it is already attached)
+        cursor.execute(sql.SQL("ALTER TABLE {temp_parent} DETACH PARTITION {temp_table};").format(
             temp_parent=sql.Identifier(temp_parent_table_name),
             temp_table=sql.Identifier(temp_table_name)
         ))
-
         # Drop the existing old partition table (you can truncate instead if you want to preserve structure)
         cursor.execute(sql.SQL("DROP TABLE IF EXISTS {table} CASCADE;").format(
             table=sql.Identifier(table_name)
@@ -394,10 +397,10 @@ def switch_active_version(state, theme, release_date):
         print(f"An error occurred on switch versions: {e}")
 
     finally:
-        #delete_temp_table(state, theme)  # assuming this won't break if the table was renamed
         cursor.close()
         conn.close()
     return done
+
 
 def read_shapefile(shapefile_path):
     # Open the shapefile using OGR
