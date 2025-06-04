@@ -20,16 +20,16 @@ docker compose up -d
 then check on browser localhost on ports 8501 and 8000.
 Database on port 5433. For database you may change passwords.
 
+
+
 Using Dockerfile
 ```
 docker build -t etl-image -f Dockerfile.etl .
 docker build -t api-image -f Dockerfile.api .
-docker build -t app-image -f Dockerfile.app .
 
 # create .env with yours env vars
 docker run -d --name etl-container --restart=unless-stopped --network=host --env-file .env etl-image
 docker run -d --name api-container --restart=unless-stopped --network=host --env-file .env api-image
-docker run -d --name app-container --restart=unless-stopped --network=host --env-file .env app-image
 ```
 
 check logs with
@@ -165,14 +165,3 @@ ALTER USER postgres WITH PASSWORD 'NEW_PASSWORD';
 ```
 
 and update your .env credentials file
-
-
-
-
-
-
-
-
-
-
-
